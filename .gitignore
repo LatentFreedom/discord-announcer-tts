@@ -1,0 +1,8 @@
+.DS_Store
+node_modules
+sounds/*.mp3
+members.json
+.env
+package-lock.json
+discord_announcer.service
+serviceaccount.json
