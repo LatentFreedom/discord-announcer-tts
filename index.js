@@ -8,6 +8,7 @@ import fs from 'fs/promises'
 
 config({ path: './.env' })
 
+const audioQueue = []
 const client = new Client({
   intents : [
     GatewayIntentBits.Guilds,
@@ -25,77 +26,109 @@ client.on('ready', async () => {
     }, 300000);
 })
 
+async function playNextAudio(connection) {
+  if (audioQueue.length === 0) {
+    connection.disconnect();
+    setPresence(client, `on ${getRandomPresence()}`, 'PLAYING', 'idle');
+    return;
+  }
+
+  const { username, soundFileName } = audioQueue[0]; // Get the next file in the queue
+  setPresence(client, `audio for ${username}`, 'PLAYING', 'idle');
+
+  const player = createAudioPlayer();
+  connection.subscribe(player);
+
+  const resource = createAudioResource(`./sounds/${soundFileName}`, { inlineVolume: true });
+  resource.volume.setVolume(0.2);
+  player.play(resource);
+
+  player.on('stateChange', (oldState, newState) => {
+    if (newState.status === 'idle' && oldState.status === 'playing') {
+      audioQueue.shift(); // Remove the played audio from the queue
+      playNextAudio(connection); // Check for the next audio in the queue
+    }
+  });
+}
+
 client.on('voiceStateUpdate', async (oldState, newState) => {
 
   // CHECK if user state is new
   if (oldState.channelId != newState.channelId) {
 
-    // CHECK if the new state is the desired voice chat channel
-    if (newState.channelId != process.env.DISCORD_VC_ID) {
-      return;
-    }
-
     const user = newState.member.user;
-
     // CHECK if bot joined and do not play anything
     if (user.bot) {
       return;
     }
 
-    // CHECK if user is VIP
-    const text = `Welcome ${user.tag}`;
+    let text = null;
+    let channelId = null;
+    const username = user.tag.split('#')[0];
+    
+    // CHECK if the new state is the #general voice chat channel
+    if (newState.channelId == process.env.DISCORD_VC_ID) {
+      text = `Welcome ${username}`;
+      channelId = newState.channelId;
+    // CHECK if the old state is the #general voice chat channel
+    } else if (oldState.channelId == process.env.DISCORD_VC_ID) {
+      text = `Goodbye ${username}`;
+      channelId = oldState.channelId;
+    } else {
+      return;
+    }
+    
     let soundFileName = `${text.replace(' ','-')}.mp3`;
     if (!(await fileExists(`./sounds/${soundFileName}`))) {
       console.log(`fetching ${soundFileName} from google`);
       soundFileName = await fetchAudio(text);
     }
 
-    // Join voice channel and play audio
-    setPresence(client, 'intro audio', 'PLAYING','online');
-    const connection = joinVoiceChannel({
-      channelId: newState.channelId,
-      guildId: newState.guild.id,
-      adapterCreator: newState.guild.voiceAdapterCreator
-    });
+    // Check if user audio is already in the queue
+    const audioExistsInQueue = audioQueue.some(audio => audio.username === username && audio.soundFileName === soundFileName);
+    if (audioExistsInQueue) {
+      return;
+    }
+    audioQueue.push({ username: username, soundFileName: soundFileName });
 
-    const player = createAudioPlayer();
-    connection.subscribe(player);
+    // Check if the bot is already in the voice channel
+    const botVoiceState = newState.guild.members.cache.get(client.user.id);
+    const botIsInVoiceChannel = botVoiceState.voice.channelId === process.env.DISCORD_VC_ID;
 
-    // CONFIGURE audio to be played
-    const resource = createAudioResource(`./sounds/${soundFileName}`, { inlineVolume: true });
-    resource.volume.setVolume(0.2);
-    player.play(resource);
-
-    // Disconnect after 5 seconds
-    setTimeout(() => {
-      connection.disconnect();
-      setPresence(client, `on ${getRandomPresence()}`, 'PLAYING','idle');
-    }, 5000);
+    if (!botIsInVoiceChannel) {
+      const connection = joinVoiceChannel({
+        channelId: channelId,
+        guildId: newState.guild.id,
+        adapterCreator: newState.guild.voiceAdapterCreator,
+      });
+      // Join voice channel and play audio
+      playNextAudio(connection);
+    }
 
   }
 
 });
 
 const fetchAudio = async (text) => {
-   // Generate TTS audio URL
-   const googleClient = new textToSpeech.TextToSpeechClient();
-   const fileName = `${text.replace(' ','-')}.mp3`;
+  // Generate TTS audio URL
+  const googleClient = new textToSpeech.TextToSpeechClient();
+  const fileName = `${text.replace(' ','-')}.mp3`;
 
-   // Construct the request
-   const request = {
-     input: {text: text},
-     // Select the language and SSML voice gender (optional)
-     voice: {languageCode: 'en-US', ssmlGender: 'NEUTRAL'},
-     // select the type of audio encoding
-     audioConfig: {audioEncoding: 'MP3'},
-   };
+  // Construct the request
+  const request = {
+    input: {text: text},
+    // Select the language and SSML voice gender (optional)
+    voice: {languageCode: 'en-US', ssmlGender: 'NEUTRAL'},
+    // select the type of audio encoding
+    audioConfig: {audioEncoding: 'MP3'},
+  };
 
-   // Performs the text-to-speech request
-   const [response] = await googleClient.synthesizeSpeech(request);
-   // Write the binary audio content to a local file
-   const writeFile = util.promisify(fs.writeFile);
-   writeFile(`./sounds/${fileName}`, response.audioContent, 'binary');
-   return fileName;
+  // Performs the text-to-speech request
+  const [response] = await googleClient.synthesizeSpeech(request);
+  // Write the binary audio content to a local file
+  const writeFile = util.promisify(fs.writeFile);
+  writeFile(`./sounds/${fileName}`, response.audioContent, 'binary');
+  return fileName;
 }
 
 async function fileExists(path) {
