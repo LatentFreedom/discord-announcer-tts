@@ -77,31 +77,42 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     } else {
       return;
     }
+
+    // GET channel
+    const channel = newState.guild.channels.cache.get(channelId);
+    // CHECK if channel has no members
+    if (channel && channel.members.filter(member => !member.user.bot).size === 0) {
+      return;
+    }
     
+    // FORMAT sound file name
     let soundFileName = `${text.replace(' ','-')}.mp3`;
+    // CHECK if sound file already exists
     if (!(await fileExists(`./sounds/${soundFileName}`))) {
+      // FETCH sound from google
       console.log(`fetching ${soundFileName} from google`);
       soundFileName = await fetchAudio(text);
     }
 
-    // Check if user audio is already in the queue
+    // CHECK if user audio is already in the queue
     const audioExistsInQueue = audioQueue.some(audio => audio.username === username && audio.soundFileName === soundFileName);
     if (audioExistsInQueue) {
       return;
     }
     audioQueue.push({ username: username, soundFileName: soundFileName });
 
-    // Check if the bot is already in the voice channel
+    // CHECK if the bot is already in the voice channel
     const botVoiceState = newState.guild.members.cache.get(client.user.id);
     const botIsInVoiceChannel = botVoiceState.voice.channelId === process.env.DISCORD_VC_ID;
 
+    // CHECK if bot is already in voice channel
     if (!botIsInVoiceChannel) {
       const connection = joinVoiceChannel({
         channelId: channelId,
         guildId: newState.guild.id,
         adapterCreator: newState.guild.voiceAdapterCreator,
       });
-      // Join voice channel and play audio
+      // JOIN voice channel and play audio
       playNextAudio(connection);
     }
 
@@ -118,7 +129,7 @@ const fetchAudio = async (text) => {
   const request = {
     input: {text: text},
     // Select the language and SSML voice gender (optional)
-    voice: {languageCode: 'en-US', ssmlGender: 'NEUTRAL'},
+    voice: {languageCode: 'en-US', name: 'en-GB-Standard-A', ssmlGender: 'FEMALE'},
     // select the type of audio encoding
     audioConfig: {audioEncoding: 'MP3'},
   };
